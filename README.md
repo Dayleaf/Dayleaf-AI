@@ -7,7 +7,7 @@
 
 - Python 3.11
 - FastAPI
-- Gemini 1.5 Flash
+- Gemini 2.5 Flash
 
 ## 로컬 개발환경 실행 가이드
 
