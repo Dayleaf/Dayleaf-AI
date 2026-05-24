@@ -1,0 +1,52 @@
+# .github/workflows/ci.yml
+
+name: CI
+
+on:
+  pull_request:
+    # develop 브랜치로 향하는 PR이 열리거나 커밋이 푸시될 때 실행된다.
+    branches:
+      - develop
+      - main
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # requirements.txt 기반으로 의존성 캐시를 구성한다.
+          # 파일 내용이 동일하면 캐시를 재사용해 설치 시간을 단축한다.
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: pytest 실행
+        # GEMINI_API_KEY는 테스트에서 sys.modules mock으로 SDK를 차단하므로
+        # 실제 키 값이 없어도 테스트가 통과한다.
+        # 단, app/core/gemini.py의 환경변수 검증을 우회하기 위해 더미 값을 주입한다.
+        env:
+          GEMINI_API_KEY: "dummy-key-for-ci"
+        run: pytest
+
+  docker-build:
+    name: Docker 이미지 빌드 검증
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Docker 이미지 빌드
+        # 실제 실행은 하지 않고 빌드만 검증한다.
+        # Dockerfile 문법 오류나 의존성 설치 실패를 PR 단계에서 조기에 감지한다.
+        run: docker build -t dayleaf-ai:ci .

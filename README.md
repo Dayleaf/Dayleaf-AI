@@ -1,5 +1,7 @@
 # Dayleaf AI Server
 
+[![CI](https://github.com/Dayleaf/Dayleaf-AI/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Dayleaf/Dayleaf-AI/actions/workflows/ci.yml)
+
 🌿 Dayleaf의 AI 서버입니다.
 `Python` + `FastAPI` 기반으로 구성되어 있으며, Gemini 1.5 Flash를 활용한 날씨 브리핑 서비스를 제공합니다.
 
