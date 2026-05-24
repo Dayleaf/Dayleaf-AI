@@ -1,0 +1,13 @@
+services:
+  dayleaf-ai:
+    build: .
+    container_name: dayleaf-ai
+    ports:
+      - "8000:8000"
+    env_file:
+      # .env 파일의 GEMINI_API_KEY를 컨테이너 환경변수로 주입
+      # .env 파일은 .dockerignore로 이미지에 포함되지 않으며,
+      # 런타임에만 주입되므로 키가 이미지에 노출되지 않는다.
+      - .env
+    # 컨테이너 비정상 종료 시 자동 재시작
+    restart: unless-stopped

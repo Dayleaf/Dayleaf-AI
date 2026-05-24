@@ -55,3 +55,30 @@ GET http://localhost:8000/health
 ### 7. API 문서
 http://localhost:8000/docs
 
+---
+
+## Docker 실행 가이드
+
+### 1. 환경변수 설정
+
+로컬 개발 가이드의 4번과 동일하게 `.env` 파일을 준비해주세요.
+
+```bash
+cp .env.example .env
+# .env 파일을 열어 GEMINI_API_KEY 값을 채워주세요.
+```
+
+### 2. 컨테이너 빌드 및 실행
+
+```bash
+docker-compose up --build
+```
+
+### 3. 헬스체크
+GET http://localhost:8000/health
+
+### 4. 컨테이너 종료
+
+```bash
+docker-compose down
+```
