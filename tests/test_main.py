@@ -3,14 +3,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
-# SDK import 차단
+# SDK import 차단 (google-genai 기준)
 # 이유:
-#   google.generativeai는 import 시점에 네트워크/인증을 시도할 수 있다.
+#   google.genai는 import 시점에 네트워크/인증을 시도할 수 있다.
 #   테스트 환경에서는 실제 SDK가 불필요하므로, sys.modules에 MagicMock을 주입해
 #   import 자체를 가로챈다.
 import sys
-sys.modules["google.generativeai"] = MagicMock()
-sys.modules["google.ai.generativelanguage_v1beta"] = MagicMock()
+sys.modules["google.genai"] = MagicMock()
+sys.modules["google.genai.types"] = MagicMock()
 sys.modules["app.core.gemini"] = MagicMock()
 
 from main import app  # noqa: E402 (SDK mock 이후에 import해야 하므로 순서 고정)
@@ -51,11 +51,12 @@ _ROUTER_PATCH_TARGET = "app.router.weather.get_weather_briefing"
 #   따라서 app.service.weather 네임스페이스의 참조를 patch해야 mock이 적용된다.
 _PARSER_PATCH_TARGET = "app.service.weather.parse_briefing_response"
 
-# Gemini model.generate_content_async patch 대상 경로
+# Gemini generate_content patch 대상 경로
 # 이유:
-#   parse_briefing_response가 호출되려면 Gemini 호출이 먼저 성공해야 한다.
-#   실제 Gemini API를 호출하지 않도록 GenerativeModel 생성자를 mock으로 대체한다.
-_GEMINI_MODEL_PATCH_TARGET = "app.service.weather.genai.GenerativeModel"
+#   새 SDK는 GenerativeModel 대신 client.aio.models.generate_content를 직접 호출한다.
+#   parse_briefing_response가 호출되려면 Gemini 호출이 먼저 성공해야 하므로
+#   이 경로를 mock해 실제 네트워크 요청을 차단한다.
+_GEMINI_MODEL_PATCH_TARGET = "app.service.weather.client.aio.models.generate_content"
 
 # Gemini mock 응답 텍스트
 # parse_briefing_response가 호출될 때 전달받을 raw_text 값이다.
@@ -68,26 +69,19 @@ _MOCK_GEMINI_RAW_RESPONSE = json.dumps({
 })
 
 
-def _make_mock_gemini_model(raw_text: str) -> MagicMock:
+def _make_mock_gemini_response(raw_text: str) -> MagicMock:
     """
-    Gemini GenerativeModel을 대체하는 mock 객체를 생성합니다.
+    client.aio.models.generate_content()가 반환할 mock response 객체를 생성합니다.
 
     Args:
-        raw_text (str): generate_content_async()가 반환할 mock response의 text 값.
+        raw_text (str): response.text에 담길 mock 값.
 
     Returns:
-        MagicMock: GenerativeModel mock 객체.
-                   generate_content_async()는 response.text = raw_text인 AsyncMock을 반환한다.
+        MagicMock: response.text = raw_text인 mock 객체.
     """
-    # response.text 속성을 가진 mock response 객체
     mock_response = MagicMock()
     mock_response.text = raw_text
-
-    # generate_content_async()는 코루틴이므로 AsyncMock을 사용한다.
-    mock_model = MagicMock()
-    mock_model.generate_content_async = AsyncMock(return_value=mock_response)
-
-    return mock_model
+    return mock_response
 
 
 # ── 기존 테스트: HTTPException 핸들러 포맷 검증 ───────────────────────────────
@@ -208,23 +202,22 @@ class TestGeminiParseError:
         parse_briefing_response가 json.JSONDecodeError를 발생시킬 때
         - HTTP 502 반환
         - error_code가 "GEMINI_PARSE_ERROR"인지 확인
-        - message에 파싱 실패 관련 문구가 포함됐는지 확인
 
         시나리오: Gemini가 JSON이 아닌 텍스트를 반환한 경우
         """
-        mock_model = _make_mock_gemini_model(_MOCK_GEMINI_RAW_RESPONSE)
-
-        with patch(_GEMINI_MODEL_PATCH_TARGET, return_value=mock_model), \
-             patch(
-                 _PARSER_PATCH_TARGET,
-                 side_effect=json.JSONDecodeError("mock decode error", doc="", pos=0),
-             ):
+        with patch(
+            _GEMINI_MODEL_PATCH_TARGET,
+            new_callable=AsyncMock,
+            return_value=_make_mock_gemini_response(_MOCK_GEMINI_RAW_RESPONSE),
+        ), patch(
+            _PARSER_PATCH_TARGET,
+            side_effect=json.JSONDecodeError("mock decode error", doc="", pos=0),
+        ):
             response = client.post("/api/v1/weather/briefing", json=VALID_REQUEST_BODY)
 
         assert response.status_code == 502
         body = response.json()
         assert body["error_code"] == "GEMINI_PARSE_ERROR"
-        assert "GEMINI_PARSE_ERROR" == body["error_code"]  # JSONDecodeError는 ValueError 하위 클래스로 파싱 실패 블록에서 처리됨
 
     def test_key_error_returns_502(self):
         """
@@ -234,13 +227,14 @@ class TestGeminiParseError:
 
         시나리오: JSON에 필수 키(message, icon_code, clothing 중 하나)가 없는 경우
         """
-        mock_model = _make_mock_gemini_model(_MOCK_GEMINI_RAW_RESPONSE)
-
-        with patch(_GEMINI_MODEL_PATCH_TARGET, return_value=mock_model), \
-             patch(
-                 _PARSER_PATCH_TARGET,
-                 side_effect=KeyError("icon_code"),
-             ):
+        with patch(
+            _GEMINI_MODEL_PATCH_TARGET,
+            new_callable=AsyncMock,
+            return_value=_make_mock_gemini_response(_MOCK_GEMINI_RAW_RESPONSE),
+        ), patch(
+            _PARSER_PATCH_TARGET,
+            side_effect=KeyError("icon_code"),
+        ):
             response = client.post("/api/v1/weather/briefing", json=VALID_REQUEST_BODY)
 
         assert response.status_code == 502
@@ -256,13 +250,14 @@ class TestGeminiParseError:
         시나리오: icon_code 또는 clothing 값이 정의된 Enum 범위를 벗어난 경우
                   예) icon_code: "HAIL" — IconCode에 정의되지 않은 값
         """
-        mock_model = _make_mock_gemini_model(_MOCK_GEMINI_RAW_RESPONSE)
-
-        with patch(_GEMINI_MODEL_PATCH_TARGET, return_value=mock_model), \
-             patch(
-                 _PARSER_PATCH_TARGET,
-                 side_effect=ValueError("'HAIL' is not a valid IconCode"),
-             ):
+        with patch(
+            _GEMINI_MODEL_PATCH_TARGET,
+            new_callable=AsyncMock,
+            return_value=_make_mock_gemini_response(_MOCK_GEMINI_RAW_RESPONSE),
+        ), patch(
+            _PARSER_PATCH_TARGET,
+            side_effect=ValueError("'HAIL' is not a valid IconCode"),
+        ):
             response = client.post("/api/v1/weather/briefing", json=VALID_REQUEST_BODY)
 
         assert response.status_code == 502
