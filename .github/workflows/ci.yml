@@ -36,7 +36,7 @@ jobs:
         # 단, app/core/gemini.py의 환경변수 검증을 우회하기 위해 더미 값을 주입한다.
         env:
           GEMINI_API_KEY: "dummy-key-for-ci"
-        run: pytest
+        run: python -m pytest
 
   docker-build:
     name: Docker 이미지 빌드 검증
