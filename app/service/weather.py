@@ -8,7 +8,7 @@
 # - parser/weather.py : raw JSON 문자열 → Pydantic 모델 변환 (순수 변환, HTTP 무관)
 
 from google.genai import types
-from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
+from google.genai import errors as genai_errors
 from fastapi import HTTPException
 
 # core/gemini.py import로 Client 인스턴스를 가져온다.
@@ -59,33 +59,74 @@ async def get_weather_briefing(request: WeatherBriefingRequest) -> WeatherBriefi
             ),
         )
 
-    except DeadlineExceeded:
+
+    except genai_errors.ServerError as e:
+
+        # 새 SDK는 DeadlineExceeded 대신 ServerError의 status로 타임아웃을 판별한다.
+
+        if "timeout" in str(e).lower() or "deadline" in str(e).lower():
+            raise HTTPException(
+
+                status_code=504,
+
+                detail={
+
+                    "error_code": ErrorCode.GEMINI_TIMEOUT,
+
+                    "message": "Gemini 응답 시간이 초과되었습니다.",
+
+                },
+
+            )
+
         raise HTTPException(
-            status_code=504,
+
+            status_code=502,
+
             detail={
-                "error_code": ErrorCode.GEMINI_TIMEOUT,
-                "message": "Gemini 응답 시간이 초과되었습니다.",
+
+                "error_code": ErrorCode.GEMINI_API_ERROR,
+
+                "message": f"Gemini API 호출에 실패했습니다: {str(e)}",
+
             },
+
         )
 
-    except GoogleAPICallError as e:
+
+    except genai_errors.ClientError as e:
+
+        # 401/403 계열 — 인증 실패
+
         is_auth_error = any(keyword in str(e) for keyword in _AUTH_ERROR_KEYWORDS)
 
         if is_auth_error:
             raise HTTPException(
+
                 status_code=401,
+
                 detail={
+
                     "error_code": ErrorCode.GEMINI_AUTH_ERROR,
+
                     "message": "Gemini API 키 인증에 실패했습니다.",
+
                 },
+
             )
 
         raise HTTPException(
+
             status_code=502,
+
             detail={
+
                 "error_code": ErrorCode.GEMINI_API_ERROR,
+
                 "message": f"Gemini API 호출에 실패했습니다: {str(e)}",
+
             },
+
         )
 
     # 3. 응답 파싱
