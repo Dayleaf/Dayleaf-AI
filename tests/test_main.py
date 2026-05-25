@@ -15,6 +15,7 @@ sys.modules["app.core.gemini"] = MagicMock()
 
 from main import app  # noqa: E402 (SDK mock 이후에 import해야 하므로 순서 고정)
 from app.schema.error import ErrorCode  # noqa: E402
+from app.schema.weather import WeatherBriefingResponse, IconCode, Clothing
 
 client = TestClient(app)
 
@@ -263,3 +264,81 @@ class TestGeminiParseError:
         assert response.status_code == 502
         body = response.json()
         assert body["error_code"] == "GEMINI_PARSE_ERROR"
+
+    # ── 신규 테스트: happy path (정상 응답) 시나리오 검증 ─────────────────────────
+
+    # 검증 목표:
+    #   Gemini가 정상 응답을 반환했을 때
+    #   - HTTP 200 반환
+    #   - WeatherBriefingResponse 포맷(message, icon_code, clothing) 검증
+    #
+    # Mock 전략:
+    #   - _GEMINI_MODEL_PATCH_TARGET: 실제 Gemini API 호출 차단
+    #   - _PARSER_PATCH_TARGET: parse_briefing_response를 정상 Pydantic 객체 반환으로 mock
+    #     이유: parser의 정확성은 TestGeminiParseError에서 이미 검증됨
+    #           여기서는 "service → router → 응답 포맷" 흐름만 검증하면 충분함
+    class TestHappyPath:
+        # 정상 응답 mock 픽스처
+        # WeatherBriefingResponse 객체를 직접 생성해 parser가 반환할 값으로 사용한다.
+        _MOCK_BRIEFING_RESPONSE = WeatherBriefingResponse(
+            message="오늘은 맑고 따뜻한 하루가 될 것 같습니다. 가볍게 반팔 차림으로 나서셔도 좋을 것 같아요.",
+            icon_code=IconCode.SUNNY,
+            clothing=[Clothing.T_SHIRT],
+        )
+
+        def test_success_returns_200(self):
+            """
+            Gemini 정상 응답 시
+            - HTTP 200 반환
+            - WeatherBriefingResponse 포맷(message, icon_code, clothing 키) 확인
+            - icon_code, clothing 값이 올바른 Enum 문자열인지 확인
+            """
+            with patch(
+                    _GEMINI_MODEL_PATCH_TARGET,
+                    new_callable=AsyncMock,
+                    return_value=_make_mock_gemini_response(_MOCK_GEMINI_RAW_RESPONSE),
+            ), patch(
+                _PARSER_PATCH_TARGET,
+                return_value=self._MOCK_BRIEFING_RESPONSE,
+            ):
+                response = client.post("/api/v1/weather/briefing", json=VALID_REQUEST_BODY)
+
+            assert response.status_code == 200
+
+            body = response.json()
+            assert "message" in body
+            assert "icon_code" in body
+            assert "clothing" in body
+
+            assert isinstance(body["message"], str)
+            assert body["icon_code"] == "SUNNY"
+            assert body["clothing"] == ["T_SHIRT"]
+
+        def test_success_with_multiple_clothing(self):
+            """
+            clothing이 여러 개일 때 리스트 형태로 올바르게 반환되는지 확인
+
+            시나리오: 추위를 타는 사용자 (VERY_COLD) — 여러 겹 옷차림 추천
+            """
+            mock_response = WeatherBriefingResponse(
+                message="오늘은 기온이 꽤 낮아 두툼하게 입고 나서시는 게 좋겠습니다. 패딩과 코트를 챙겨보세요.",
+                icon_code=IconCode.CLOUDY,
+                clothing=[Clothing.LONG_SLEEVE, Clothing.JACKET, Clothing.COAT],
+            )
+
+            with patch(
+                    _GEMINI_MODEL_PATCH_TARGET,
+                    new_callable=AsyncMock,
+                    return_value=_make_mock_gemini_response(_MOCK_GEMINI_RAW_RESPONSE),
+            ), patch(
+                _PARSER_PATCH_TARGET,
+                return_value=mock_response,
+            ):
+                response = client.post("/api/v1/weather/briefing", json=VALID_REQUEST_BODY)
+
+            assert response.status_code == 200
+
+            body = response.json()
+            assert body["icon_code"] == "CLOUDY"
+            assert body["clothing"] == ["LONG_SLEEVE", "JACKET", "COAT"]
+            assert len(body["clothing"]) == 3
